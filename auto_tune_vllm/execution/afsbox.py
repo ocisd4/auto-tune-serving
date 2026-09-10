@@ -511,12 +511,22 @@ class AFSBoxK8sBackend(ExecutionBackend):
             endpoint_model = "opt-125m"
 
         service_port = self.engine_adapter.default_port
+        parent_spec = self._get_parent_tuning_spec()
         if self.serving_template and isinstance(self.serving_template, dict):
             service_port = self.serving_template.get("engine", {}).get("servicePort", service_port)
-        else:
-            parent_spec = self._get_parent_tuning_spec()
-            if parent_spec and isinstance(parent_spec, dict):
-                service_port = parent_spec.get("servingTemplate", {}).get("engine", {}).get("servicePort", service_port)
+        elif parent_spec and isinstance(parent_spec, dict):
+            service_port = parent_spec.get("servingTemplate", {}).get("engine", {}).get("servicePort", service_port)
+
+        endpoint_dict = {
+            "url": f"http://{serving_name}.{self.namespace}.svc.cluster.local:{service_port}",
+        }
+        if endpoint_model:
+            endpoint_dict["modelName"] = endpoint_model
+
+        if parent_spec and isinstance(parent_spec, dict):
+            parent_endpoint = parent_spec.get("endpoint") or {}
+            if "apiKeySecretRef" in parent_endpoint:
+                endpoint_dict["apiKeySecretRef"] = parent_endpoint["apiKeySecretRef"]
 
         bench_body = {
             "apiVersion": f"{AFSBOX_GROUP}/{AFSBOX_VERSION}",
@@ -533,10 +543,7 @@ class AFSBoxK8sBackend(ExecutionBackend):
                 "displayName": f"Optuna / {trial_id}",
                 "target": {
                     "modelServingRef": {"name": serving_name},
-                    "endpoint": {
-                        "url": f"http://{serving_name}.{self.namespace}.svc.cluster.local:{service_port}/v1",
-                        "modelName": endpoint_model,
-                    },
+                    "endpoint": endpoint_dict,
                 },
                 "suite": suite,
             },
@@ -1022,6 +1029,76 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
 
     # Default parameters tailored to the engine
     params_dict = engine_adapter.get_default_parameter_space()
+
+    # Dynamically extract parameters from BenchmarkTemplate sweeps if referenced
+    template_name = tuning_obj.get("metadata", {}).get("labels", {}).get("platform.afsbox.asus.com/template")
+    if template_name:
+        for tpl_ns in [namespace, "afsbox-system", "default"]:
+            try:
+                tpl_obj = custom_api.get_namespaced_custom_object(
+                    group="platform.afsbox.asus.com",
+                    version="v1beta1",
+                    namespace=tpl_ns,
+                    plural="benchmarktemplates",
+                    name=template_name,
+                )
+                sweeps = tpl_obj.get("spec", {}).get("sweeps", [])
+                if sweeps:
+                    extracted_params = {}
+                    for sw in sweeps:
+                        var_name = sw.get("variable", "")
+                        var_lower = var_name.lower().replace("-", "_")
+                        if var_lower in ("batchsize", "batch_size", "max_num_seqs"):
+                            param_name = "batch_size"
+                        elif var_lower in ("gpumemoryutilization", "gpu_memory_utilization", "gpu_mem_util"):
+                            param_name = "gpu_memory_utilization"
+                        elif var_lower in ("prefillsettings.maxbatchtokens", "max_num_batched_tokens", "max_batch_tokens", "maxbatchtokens"):
+                            param_name = "max_num_batched_tokens"
+                        elif var_lower in ("contextlength", "context_length", "max_model_len"):
+                            param_name = "context_length"
+                        elif var_lower in ("parallelism.tp", "tp", "tensor_parallel_size"):
+                            param_name = "tensor_parallel_size"
+                        elif var_lower in ("kvcachedtype", "kv_cache_dtype"):
+                            param_name = "kv_cache_dtype"
+                        else:
+                            param_name = var_name.replace(".", "_")
+
+                        kind = sw.get("kind", "values")
+                        if kind == "values":
+                            raw_vals = sw.get("values", [])
+                            conv_vals = []
+                            for v in raw_vals:
+                                try:
+                                    if "." in str(v):
+                                        conv_vals.append(float(v))
+                                    else:
+                                        conv_vals.append(int(v))
+                                except ValueError:
+                                    conv_vals.append(str(v))
+                            extracted_params[param_name] = {
+                                "enabled": True,
+                                "options": conv_vals,
+                            }
+                        elif kind == "range":
+                            r_conf = {
+                                "enabled": True,
+                                "min": float(sw.get("min", 0)),
+                                "max": float(sw.get("max", 1)),
+                            }
+                            if "step" in sw and sw["step"] is not None:
+                                r_conf["step"] = float(sw["step"])
+                            extracted_params[param_name] = r_conf
+                    if extracted_params:
+                        logger.info(
+                            "Extracted %d parameters from BenchmarkTemplate %s sweeps: %s",
+                            len(extracted_params),
+                            template_name,
+                            list(extracted_params.keys()),
+                        )
+                        params_dict = extracted_params
+                break
+            except Exception as e:
+                logger.debug("Attempt to fetch BenchmarkTemplate %s in ns %s: %s", template_name, tpl_ns, e)
 
     n_trials = opt_spec.get("nTrials", 20)
     n_startup = max(1, min(5, n_trials - 1)) if n_trials > 1 else 1

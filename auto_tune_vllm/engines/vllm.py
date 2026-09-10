@@ -46,6 +46,12 @@ class VLLMEngineAdapter(EngineAdapter):
                 baseline["context_length"] = int(serving_template["contextLength"])
             except (ValueError, TypeError):
                 pass
+        if "prefillSettings" in serving_template and isinstance(serving_template["prefillSettings"], dict):
+            if "maxBatchTokens" in serving_template["prefillSettings"]:
+                try:
+                    baseline["max_num_batched_tokens"] = int(serving_template["prefillSettings"]["maxBatchTokens"])
+                except (ValueError, TypeError):
+                    pass
         return baseline
 
     def map_to_serving_patch(self, params: Dict[str, Any]) -> Dict[str, Any]:
