@@ -65,27 +65,27 @@ class VLLMEngineAdapter(EngineAdapter):
 
             # Top-level AFSBox CR fields natively understood by controller
             if k_lower in ("batchsize", "batch_size", "max_num_seqs"):
-                spec_patch["batchSize"] = str(v)
+                spec_patch["batchSize"] = str(int(round(float(v))))
             elif k_lower in ("contextlength", "context_length", "max_model_len"):
-                spec_patch["contextLength"] = str(v)
+                spec_patch["contextLength"] = str(int(round(float(v))))
             elif k_lower in ("replicas", "replica_count"):
-                spec_patch["replicas"] = int(v)
+                spec_patch["replicas"] = int(round(float(v)))
 
             # Parallelism
             elif k_lower in ("tp", "tensor_parallel_size"):
-                parallelism["tp"] = int(v)
+                parallelism["tp"] = int(round(float(v)))
             elif k_lower in ("pp", "pipeline_parallel_size"):
-                parallelism["pp"] = int(v)
+                parallelism["pp"] = int(round(float(v)))
             elif k_lower in ("dp", "data_parallel_size"):
-                parallelism["dp"] = int(v)
+                parallelism["dp"] = int(round(float(v)))
 
             # GPU & Memory
             elif k_lower in ("gpu_memory_utilization", "gpu_mem_util"):
-                spec_patch["gpuMemoryUtilization"] = str(v)
+                spec_patch["gpuMemoryUtilization"] = str(round(float(v), 4))
             elif k_lower in ("max_num_batched_tokens", "max_batch_tokens"):
                 if "prefillSettings" not in spec_patch:
                     spec_patch["prefillSettings"] = {}
-                spec_patch["prefillSettings"]["maxBatchTokens"] = str(v)
+                spec_patch["prefillSettings"]["maxBatchTokens"] = str(int(round(float(v))))
             elif k_lower in ("kv_cache_dtype",):
                 spec_patch["kvCacheDtype"] = str(v)
             elif k_lower in ("enable_cuda_graphs", "cuda_graph"):
@@ -99,7 +99,11 @@ class VLLMEngineAdapter(EngineAdapter):
             elif k.startswith("values.") or k.startswith("params."):
                 extra_args.append(f"--{k}={v}")
             else:
-                extra_args.append(f"--{k.replace('_', '-')}={v}")
+                if isinstance(v, float) and v.is_integer():
+                    v_str = str(int(v))
+                else:
+                    v_str = str(v)
+                extra_args.append(f"--{k.replace('_', '-')}={v_str}")
 
         if parallelism:
             spec_patch["parallelism"] = parallelism

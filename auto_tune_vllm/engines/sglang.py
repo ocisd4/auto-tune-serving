@@ -86,33 +86,34 @@ class SGLangEngineAdapter(EngineAdapter):
 
             # Top-level AFSBox CR fields: controller translates batchSize to --max-running-requests
             if k_lower in ("batchsize", "batch_size", "max_running_requests", "max_num_seqs"):
-                spec_patch["batchSize"] = str(v)
+                spec_patch["batchSize"] = str(int(round(float(v))))
             # Controller translates contextLength to --context-length
             elif k_lower in ("contextlength", "context_length", "max_model_len"):
-                spec_patch["contextLength"] = str(v)
+                spec_patch["contextLength"] = str(int(round(float(v))))
             elif k_lower in ("replicas", "replica_count"):
-                spec_patch["replicas"] = int(v)
+                spec_patch["replicas"] = int(round(float(v)))
 
             # Parallelism: controller translates tp to --tp-size
             elif k_lower in ("tp", "tp_size", "tensor_parallel_size"):
-                parallelism["tp"] = int(v)
+                parallelism["tp"] = int(round(float(v)))
             elif k_lower in ("pp", "pp_size", "pipeline_parallel_size"):
-                parallelism["pp"] = int(v)
+                parallelism["pp"] = int(round(float(v)))
             elif k_lower in ("dp", "dp_size", "data_parallel_size"):
-                parallelism["dp"] = int(v)
+                parallelism["dp"] = int(round(float(v)))
 
             # GPU & Memory: controller translates gpuMemoryUtilization to --mem-fraction-static
             elif k_lower in ("gpu_memory_utilization", "gpu_mem_util", "mem_fraction_static"):
-                spec_patch["gpuMemoryUtilization"] = str(v)
+                spec_patch["gpuMemoryUtilization"] = str(round(float(v), 4))
             elif k_lower in ("max_prefill_tokens", "max_num_batched_tokens"):
                 if "prefillSettings" not in spec_patch:
                     spec_patch["prefillSettings"] = {}
-                spec_patch["prefillSettings"]["maxBatchTokens"] = str(v)
+                spec_patch["prefillSettings"]["maxBatchTokens"] = str(int(round(float(v))))
             elif k_lower in ("chunked_prefill_size", "prefill_chunk_tokens"):
                 if "prefillSettings" not in spec_patch:
                     spec_patch["prefillSettings"] = {}
-                spec_patch["prefillSettings"]["prefillChunkTokens"] = str(v)
-                extra_args.append(f"--chunked-prefill-size={v}")
+                chunk_int = int(round(float(v)))
+                spec_patch["prefillSettings"]["prefillChunkTokens"] = str(chunk_int)
+                extra_args.append(f"--chunked-prefill-size={chunk_int}")
             elif k_lower in ("kv_cache_dtype",):
                 spec_patch["kvCacheDtype"] = str(v)
 

@@ -25,12 +25,12 @@ class RangeParameter(ParameterConfig):
     min_value: int | float = Field(alias="min")
     max_value: int | float = Field(alias="max")
     step: int | float | None = None
-    data_type: type[float | int] = float  # "int" or "float"
+    data_type: Any = float  # "int" or "float" or int or float
 
     @override
     def generate_optuna_suggest(self, trial: optuna.Trial) -> Union[int, float]:
         """Generate Optuna range suggestion."""
-        if self.data_type is int:
+        if self.data_type in (int, "int"):
             return trial.suggest_int(
                 self.name,
                 low=int(self.min_value),

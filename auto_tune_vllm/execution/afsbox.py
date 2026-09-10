@@ -503,12 +503,30 @@ class AFSBoxK8sBackend(ExecutionBackend):
         exec_info.mark_benchmark_started()
         suite = self._build_benchmark_suite(trial_config)
         endpoint_model = None
-        if self.serving_template and self.serving_template.get("servedModelName"):
+
+        # Extract the actual servedModelName from ready ModelServing status if available
+        actual_served_model = None
+        if serving_obj:
+            output_dict = serving_obj.get("status", {}).get("output", {})
+            if isinstance(output_dict, dict):
+                smn = output_dict.get("servedModelName")
+                if isinstance(smn, dict) and smn.get("value"):
+                    actual_served_model = smn.get("value")
+                elif isinstance(smn, str):
+                    actual_served_model = smn
+
+        if actual_served_model:
+            endpoint_model = actual_served_model
+            logger.info("Using actual servedModelName from ModelServing output: %s", endpoint_model)
+        elif self.serving_template and self.serving_template.get("servedModelName"):
             endpoint_model = self.serving_template.get("servedModelName")
         elif trial_config.benchmark_config and trial_config.benchmark_config.model:
             endpoint_model = trial_config.benchmark_config.model
         else:
             endpoint_model = "opt-125m"
+
+        if trial_config.benchmark_config and endpoint_model:
+            trial_config.benchmark_config.model = endpoint_model
 
         service_port = self.engine_adapter.default_port
         parent_spec = self._get_parent_tuning_spec()
@@ -1001,12 +1019,30 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
             {"metric": "time_to_first_token_ms", "direction": "minimize"},
         ]
 
-    # Extract servedModelName from servingTemplate
-    served_model_name = (
-        serving_template.get("servedModelName")
-        or serving_template.get("model", {}).get("valueFrom", {}).get("name")
-        or "default"
-    )
+    # Extract servedModelName from existing ModelServing output or servingTemplate
+    served_model_name = None
+    try:
+        existing_serving = custom_api.get_namespaced_custom_object(
+            group=AFSBOX_GROUP,
+            version=AFSBOX_VERSION,
+            namespace=namespace,
+            plural=PLURAL_SERVINGS,
+            name=f"{tuning_name}-serving",
+        )
+        smn = existing_serving.get("status", {}).get("output", {}).get("servedModelName", {})
+        if isinstance(smn, dict) and smn.get("value"):
+            served_model_name = smn.get("value")
+        elif isinstance(smn, str):
+            served_model_name = smn
+    except Exception:
+        pass
+
+    if not served_model_name:
+        served_model_name = (
+            serving_template.get("servedModelName")
+            or serving_template.get("model", {}).get("valueFrom", {}).get("name")
+            or "default"
+        )
 
     suite_params = test_suite[0].get("params", {}) if test_suite else {}
     isl = suite_params.get("isl", {})
@@ -1044,6 +1080,19 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
                 )
                 sweeps = tpl_obj.get("spec", {}).get("sweeps", [])
                 if sweeps:
+                    INT_PARAMS = {
+                        "batch_size",
+                        "max_num_batched_tokens",
+                        "context_length",
+                        "tensor_parallel_size",
+                        "pipeline_parallel_size",
+                        "data_parallel_size",
+                        "replicas",
+                        "max_num_seqs",
+                        "max_model_len",
+                        "max_batch_tokens",
+                        "chunked_prefill_size",
+                    }
                     extracted_params = {}
                     for sw in sweeps:
                         var_name = sw.get("variable", "")
@@ -1069,7 +1118,9 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
                             conv_vals = []
                             for v in raw_vals:
                                 try:
-                                    if "." in str(v):
+                                    if param_name in INT_PARAMS:
+                                        conv_vals.append(int(float(v)))
+                                    elif "." in str(v):
                                         conv_vals.append(float(v))
                                     else:
                                         conv_vals.append(int(v))
@@ -1080,13 +1131,33 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
                                 "options": conv_vals,
                             }
                         elif kind == "range":
-                            r_conf = {
-                                "enabled": True,
-                                "min": float(sw.get("min", 0)),
-                                "max": float(sw.get("max", 1)),
-                            }
-                            if "step" in sw and sw["step"] is not None:
-                                r_conf["step"] = float(sw["step"])
+                            min_val = sw.get("min", 0)
+                            max_val = sw.get("max", 1)
+                            step_val = sw.get("step")
+                            is_int_param = (
+                                param_name in INT_PARAMS
+                                or (
+                                    isinstance(min_val, int)
+                                    and isinstance(max_val, int)
+                                    and (step_val is None or isinstance(step_val, int))
+                                )
+                            )
+                            if is_int_param:
+                                r_conf = {
+                                    "enabled": True,
+                                    "min": int(float(min_val)),
+                                    "max": int(float(max_val)),
+                                }
+                                if step_val is not None:
+                                    r_conf["step"] = int(float(step_val))
+                            else:
+                                r_conf = {
+                                    "enabled": True,
+                                    "min": float(min_val),
+                                    "max": float(max_val),
+                                }
+                                if step_val is not None:
+                                    r_conf["step"] = float(step_val)
                             extracted_params[param_name] = r_conf
                     if extracted_params:
                         logger.info(

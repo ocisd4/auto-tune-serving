@@ -367,7 +367,7 @@ class StudyController:
 
                     # Use integer-based generation for floats
                     # to avoid accumulation drift
-                    if param_config.data_type == "float":
+                    if param_config.data_type in (float, "float"):
                         # Calculate number of steps and generate via multiplication
                         n_steps = int((max_val - min_val) / step) + 1
                         # Cap to reasonable grid size
