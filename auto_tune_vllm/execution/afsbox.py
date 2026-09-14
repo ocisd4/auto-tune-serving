@@ -177,7 +177,7 @@ class AFSBoxK8sBackend(ExecutionBackend):
                 {
                     "name": "perf-eval",
                     "type": "concurrency",
-                    "timeoutSeconds": 300,
+                    "timeoutSeconds": 3600,
                     "params": {
                         "concurrency": 8,
                         "requestCount": 100,
@@ -190,7 +190,7 @@ class AFSBoxK8sBackend(ExecutionBackend):
         # Determine benchmark item parameters
         concurrency = bc.rate or bc.concurrency or 8
         request_count = bc.samples or 100
-        timeout_seconds = bc.max_seconds or 300
+        timeout_seconds = max(bc.max_seconds or 3600, 3600)
 
         params: Dict[str, Any] = {
             "streaming": True,
@@ -1055,7 +1055,7 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
         "prompt_tokens": isl.get("mean", 64) if isinstance(isl, dict) else 64,
         "output_tokens": osl.get("mean", 32) if isinstance(osl, dict) else 32,
         "dataset": suite_params.get("dataset"),
-        "max_seconds": test_suite[0].get("timeoutSeconds", 60) if test_suite else 60,
+        "max_seconds": max(test_suite[0].get("timeoutSeconds", 3600), 3600) if test_suite else 3600,
     }
 
     # Detect engine type and get adapter
