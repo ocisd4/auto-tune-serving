@@ -1176,6 +1176,17 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
 
     baseline_params = engine_adapter.extract_baseline_parameters(serving_template)
 
+    probe = serving_template.get("probe", {}) if isinstance(serving_template, dict) else {}
+    startup_mins = probe.get("startupTimeoutMinutes") if isinstance(probe, dict) else None
+    deploy_timeout = int(startup_mins * 60) if startup_mins else 1800
+    import os
+    env_timeout = os.getenv("AFSBOX_DEPLOY_TIMEOUT_SECONDS") or os.getenv("DEPLOY_TIMEOUT_SECONDS")
+    if env_timeout:
+        try:
+            deploy_timeout = int(env_timeout)
+        except ValueError:
+            pass
+
     study_dict = {
         "study": {
             "name": tuning_name,
@@ -1188,7 +1199,7 @@ def synthesize_study_config_from_cr(tuning_name: str, namespace: str = "default"
             "serving_name": f"{tuning_name}-exp",
             "serving_template": serving_template,
             "cleanup_serving": True,
-            "deploy_timeout_seconds": 300,
+            "deploy_timeout_seconds": deploy_timeout,
             "poll_interval_seconds": 5,
         },
         "baseline": {
