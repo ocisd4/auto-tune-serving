@@ -67,7 +67,8 @@ def _select_best_pareto_candidate(
         return f"trial_{trial_num}" if trial_num is not None else None
 
     def score_from_improvements(p: Dict[str, Any]) -> Optional[float]:
-        improvements = [v for v in (p.get("baseline_improvements") or []) if v is not None]
+        raw = p.get("baseline_improvements") or []
+        improvements = [v for v in raw if v is not None]
         if not improvements:
             return None
         return sum(improvements) / len(improvements)
@@ -100,7 +101,8 @@ def _select_best_pareto_candidate(
             if len(v) <= obj_idx:
                 continue
             if hi == lo:
-                normalized = 1.0  # every trial tied on this objective — no signal, don't penalize
+                # Every trial tied on this objective — no signal, don't penalize.
+                normalized = 1.0
             else:
                 normalized = (v[obj_idx] - lo) / (hi - lo)
                 if direction == "minimize":
@@ -1013,7 +1015,8 @@ class AFSBoxK8sBackend(ExecutionBackend):
                 # trial 執行的時間先後），不是任何排名，容易把「剛好先跑
                 # 完又落在前沿上」的解錯認成「最好」，見
                 # _select_best_pareto_candidate 檔頭完整說明。
-                best = _select_best_pareto_candidate(pareto_front, results.get("objectives"))
+                objectives = results.get("objectives")
+                best = _select_best_pareto_candidate(pareto_front, objectives)
                 if best:
                     status["bestCandidate"] = best
             else:

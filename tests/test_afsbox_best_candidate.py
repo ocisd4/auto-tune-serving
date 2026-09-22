@@ -28,7 +28,9 @@ def test_empty_front_returns_none():
 
 
 def test_single_trial_front_returns_that_trial():
-    pareto_front = [{"trial": 7, "values": [100.0, 10.0], "baseline_improvements": [0.0, 0.0]}]
+    pareto_front = [
+        {"trial": 7, "values": [100.0, 10.0], "baseline_improvements": [0.0, 0.0]},
+    ]
     assert _select_best_pareto_candidate(pareto_front) == "trial_7"
 
 
@@ -40,8 +42,9 @@ def test_falls_back_to_normalized_values_when_no_baseline_improvements():
         {"metric": "time_to_first_token_ms", "direction": "minimize"},
     ]
     pareto_front = [
-        {"trial": 1, "values": [500.0, 30.0]},   # low throughput, high latency — dominated-ish extreme
-        {"trial": 2, "values": [900.0, 15.0]},   # best on both axes among these three
+        # low throughput, high latency — dominated-ish extreme
+        {"trial": 1, "values": [500.0, 30.0]},
+        {"trial": 2, "values": [900.0, 15.0]},  # best on both axes among these three
         {"trial": 3, "values": [700.0, 25.0]},
     ]
     assert _select_best_pareto_candidate(pareto_front, objectives) == "trial_2"
