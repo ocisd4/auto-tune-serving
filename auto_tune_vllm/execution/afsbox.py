@@ -28,6 +28,88 @@ def _deep_update(target: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
             target[k] = v
     return target
 
+
+def _select_best_pareto_candidate(
+    pareto_front: List[Dict[str, Any]],
+    objectives: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[str]:
+    """Pick a single representative trial out of a Pareto front by equal-weighted
+    score, instead of just taking whichever entry happens to be first in the list.
+
+    Pareto-optimal solutions are non-dominated by definition — there is no single
+    objectively "best" one, they're pure trade-offs. `pareto_front`'s own order
+    (Optuna's ``study.best_trials``) is not a ranking; previously this module took
+    ``pareto_front[0]`` as "bestCandidate", which just surfaced whichever trial
+    happened to sort first out of the non-dominated set (in practice this tended
+    to be an early/chronologically-first trial, not a meaningfully better one —
+    e.g. it could be shadowed by a trial with 2x the throughput that ran later).
+
+    To pick a single defensible representative, score each trial by the mean of
+    its per-objective improvement over baseline (``baseline_improvements``,
+    already direction-corrected upstream in study_controller.get_optimization_results
+    so "positive == better" regardless of maximize/minimize) and take the max.
+    All objectives are weighted equally — the study config has no per-objective
+    weight field (see core/config.py ObjectiveConfig) — so this is the least
+    presumptuous "real" multi-objective ranking without inventing a weighting
+    scheme the user never configured.
+
+    Falls back to min-max normalized raw ``values`` (direction-corrected via
+    ``objectives``) when no trial has usable baseline_improvements — e.g. the
+    baseline comparison was unavailable or baseline trials were disabled — so
+    this still produces a meaningful pick rather than silently reverting to
+    "first in list".
+    """
+    if not pareto_front:
+        return None
+
+    def trial_name(p: Dict[str, Any]) -> Optional[str]:
+        trial_num = p.get("trial")
+        return f"trial_{trial_num}" if trial_num is not None else None
+
+    def score_from_improvements(p: Dict[str, Any]) -> Optional[float]:
+        improvements = [v for v in (p.get("baseline_improvements") or []) if v is not None]
+        if not improvements:
+            return None
+        return sum(improvements) / len(improvements)
+
+    scored = [(trial_name(p), score_from_improvements(p)) for p in pareto_front]
+    if any(score is not None for _, score in scored):
+        best_name, _ = max(
+            (item for item in scored if item[1] is not None),
+            key=lambda item: item[1],
+        )
+        return best_name
+
+    # Fallback: no baseline_improvements anywhere — normalize raw `values` per
+    # objective across the front (min-max, direction-corrected) and average.
+    directions = [obj.get("direction", "maximize") for obj in (objectives or [])]
+    values_matrix = [p.get("values") or [] for p in pareto_front]
+    n_objectives = max((len(v) for v in values_matrix), default=0)
+    if n_objectives == 0:
+        # No values to rank by at all — nothing meaningful to pick beyond order.
+        return trial_name(pareto_front[0])
+
+    normalized_scores = [0.0] * len(pareto_front)
+    for obj_idx in range(n_objectives):
+        column = [v[obj_idx] for v in values_matrix if len(v) > obj_idx]
+        if not column:
+            continue
+        lo, hi = min(column), max(column)
+        direction = directions[obj_idx] if obj_idx < len(directions) else "maximize"
+        for i, v in enumerate(values_matrix):
+            if len(v) <= obj_idx:
+                continue
+            if hi == lo:
+                normalized = 1.0  # every trial tied on this objective — no signal, don't penalize
+            else:
+                normalized = (v[obj_idx] - lo) / (hi - lo)
+                if direction == "minimize":
+                    normalized = 1.0 - normalized
+            normalized_scores[i] += normalized / n_objectives
+
+    best_idx = max(range(len(pareto_front)), key=lambda i: normalized_scores[i])
+    return trial_name(pareto_front[best_idx])
+
 AFSBOX_GROUP = "afsbox.asus.com"
 AFSBOX_VERSION = "v1beta1"
 PLURAL_SERVINGS = "modelservings"
@@ -919,14 +1001,21 @@ class AFSBoxK8sBackend(ExecutionBackend):
             )
             status = tuning_obj.get("status", {})
             if results.get("type") == "multi_objective":
+                pareto_front = results.get("pareto_front", [])
                 pareto_candidates = []
-                for p in results.get("pareto_front", []):
+                for p in pareto_front:
                     trial_num = p.get("trial")
                     if trial_num is not None:
                         pareto_candidates.append(f"trial_{trial_num}")
                 status["paretoFrontier"] = pareto_candidates
-                if pareto_candidates:
-                    status["bestCandidate"] = pareto_candidates[0]
+                # 用加權分數挑代表解，不是「前沿清單第一筆」——後者只是
+                # Optuna study.best_trials 回傳的原始順序（實測就是接近
+                # trial 執行的時間先後），不是任何排名，容易把「剛好先跑
+                # 完又落在前沿上」的解錯認成「最好」，見
+                # _select_best_pareto_candidate 檔頭完整說明。
+                best = _select_best_pareto_candidate(pareto_front, results.get("objectives"))
+                if best:
+                    status["bestCandidate"] = best
             else:
                 best_num = results.get("best_trial_number")
                 if best_num is not None:
